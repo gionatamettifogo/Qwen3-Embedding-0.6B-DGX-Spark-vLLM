@@ -1,0 +1,69 @@
+name: qwen3-embedding-06b
+
+services:
+  embedding:
+    image: ${VLLM_IMAGE:-nvcr.io/nvidia/vllm:26.09-py3}
+    entrypoint: ["vllm", "serve"]
+    restart: unless-stopped
+    network_mode: host
+    ipc: host
+    gpus: all
+    mem_limit: ${CONTAINER_MEMORY_LIMIT:-12g}
+    memswap_limit: ${CONTAINER_MEMORY_LIMIT:-12g}
+    environment:
+      VLLM_API_KEY: ${LLM_API_KEY:?Set LLM_API_KEY in the embedding repo .env}
+      HF_HOME: /root/.cache/huggingface
+      HF_HUB_DISABLE_XET: "1"
+      VLLM_ENGINE_READY_TIMEOUT_S: "900"
+      EMBEDDING_BIND_HOST: ${BIND_HOST:?Set BIND_HOST in .env}
+      EMBEDDING_PORT: ${PORT:-8891}
+    volumes:
+      - ${HF_CACHE_DIRECTORY:-${HOME}/.cache/huggingface}:/root/.cache/huggingface
+      - ${VLLM_CACHE_DIRECTORY:-${HOME}/.cache/vllm}:/root/.cache/vllm
+    command:
+      - Qwen/Qwen3-Embedding-0.6B
+      - --served-model-name
+      - Qwen/Qwen3-Embedding-0.6B
+      - --runner
+      - pooling
+      - --host
+      - ${BIND_HOST:?Set BIND_HOST in .env}
+      - --port
+      - "${PORT:-8891}"
+      - --dtype
+      - bfloat16
+      - --quantization
+      - fp8
+      - --gpu-memory-utilization
+      - "${GPU_MEMORY_UTILIZATION:-0.05}"
+      - --kv-cache-memory-bytes
+      - "${KV_CACHE_MEMORY_BYTES:-1342177280}"
+      - --max-model-len
+      - "${MAX_MODEL_LEN:-8192}"
+      - --max-num-batched-tokens
+      - "${MAX_NUM_BATCHED_TOKENS:-8192}"
+      - --max-num-seqs
+      - "${MAX_NUM_SEQS:-8}"
+      - --enforce-eager
+      # Compile attention for GB10 with the container toolchain.
+      - --attention-backend
+      - TRITON_ATTN
+      - --no-enable-flashinfer-autotune
+    healthcheck:
+      test:
+        - CMD
+        - python3
+        - -c
+        - |
+          import json, os, urllib.request
+          model = "Qwen/Qwen3-Embedding-0.6B"
+          url = "http://{}:{}/v1/embeddings".format(os.environ["EMBEDDING_BIND_HOST"], os.environ["EMBEDDING_PORT"])
+          req = urllib.request.Request(url, data=json.dumps({"model": model, "input": "Verifica del servizio."}).encode(), headers={"Authorization": "Bearer " + os.environ["VLLM_API_KEY"], "Content-Type": "application/json"})
+          with urllib.request.urlopen(req, timeout=10) as response:
+              payload = json.load(response)
+          assert payload["model"] == model
+          assert len(payload["data"][0]["embedding"]) == 1024
+      start_period: 180s
+      interval: 60s
+      timeout: 15s
+      retries: 3
